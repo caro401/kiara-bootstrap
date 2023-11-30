@@ -1,0 +1,1 @@
+bin/pixi-* filter=lfs diff=lfs merge=lfs -bin

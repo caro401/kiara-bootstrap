@@ -23,7 +23,8 @@
       "targets": "all",
       "identifier": "dev.kiara.bootstrap",
       "externalBin": [
-        "../bin/kiara-tauri"
+        "../bin/kiara-tauri",
+        "../bin/pixi"
       ],
       "resources": [
         "resources/*"
