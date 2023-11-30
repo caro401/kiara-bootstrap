@@ -1,0 +1,29 @@
+[project]
+name = "kiara-bootstrapper"
+version = "0.1.0"
+description = "install python and stuff for kiara UIs"
+authors = []
+channels = ["conda-forge"]
+platforms = ["linux-64", "win-64", "osx-64", "osx-arm64"]
+
+[tasks]
+compile-python = "env PYTHON_CONFIGURE_OPTS=\"--enable-shared\" PYTHON_BUILD_DEFINITIONS=$PWD bash python-build 3.11.5 /Users/caro/.kiara-app/python"
+
+
+[dependencies]
+#kiara = ">=0.5.0"
+#"kiara_plugin.tabular" = ">=0.5.0"
+#python = ">=3.11.0"
+#"kiara_plugin.network_analysis" = ">=0.5.0"
+#libpython-static = ">=3.11.0"
+openssl = "3.*"
+cmake = "3.27.9.*"
+
+[target.linux-64.dependencies]
+gcc = "13.2.0.*"
+
+[target.osx-64.dependencies]
+clang-16 = "*"
+
+[target.osx-arm64.dependencies]
+clang-16 = "*"

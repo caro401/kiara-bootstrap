@@ -1,0 +1,5 @@
+kiara==0.5.4
+kiara-plugin.core-types==0.5.0
+kiara-plugin.network-analysis==0.5.0
+kiara-plugin.onboarding==0.5.0
+kiara-plugin.tabular==0.5.1
