@@ -5,6 +5,7 @@ use anyhow::{ensure, Context};
 use duct::cmd;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::time::Duration;
 use tauri::api::process::{Command, CommandEvent};
 use tauri::{AppHandle, Manager};
@@ -69,8 +70,9 @@ fn right_requirements_exist(handle: &AppHandle, kiara_appconfig_dir: &Path) -> b
 }
 
 fn get_embedded_pixi() -> std::process::Command {
-    // TODO get stdout from this guy
-    Command::new_sidecar("pixi").unwrap().into()
+    let mut command = std::process::Command::from(Command::new_sidecar("pixi").unwrap());
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    command
 }
 
 fn compile_python(kiara_appconfig_dir: &Path) -> anyhow::Result<()> {
@@ -80,24 +82,27 @@ fn compile_python(kiara_appconfig_dir: &Path) -> anyhow::Result<()> {
     let install_result = get_embedded_pixi()
         .arg("install")
         .current_dir(kiara_appconfig_dir)
-        .spawn()
-        .context("Failed to pixi install. Do you have pixi on the system?")?
-        .wait()
-        .context("Something went wrong with pixi")?;
-    ensure!(
-        install_result.success(),
-        "Failed to set up environment with pixi"
-    );
+        .output()
+        .context("Failed to pixi install")?;
+    if !install_result.status.success() {
+        return Err(anyhow::Error::msg(
+            String::from_utf8(install_result.stderr).unwrap(),
+        ))
+        .context("Failed to set up pixi environment");
+    }
 
     let python_result = get_embedded_pixi()
         .arg("run")
         .arg("compile-python")
         .current_dir(kiara_appconfig_dir)
-        .spawn()
-        .context("Failed to run pixi command. Do you have pixi on the system?")?
-        .wait()
+        .output()
         .context("Something went wrong with pixi?")?;
-    ensure!(python_result.success(), "Failed to compile python");
+    if !python_result.status.success() {
+        return Err(anyhow::Error::msg(
+            String::from_utf8(python_result.stderr).unwrap(),
+        ))
+        .context("Failed to compile python");
+    }
     Ok(())
 }
 
@@ -120,7 +125,13 @@ fn copy_resource_file(handle: &AppHandle, kiara_appconfig_dir: &Path, filename: 
 
 fn copy_resources(handle: &AppHandle, kiara_appconfig_dir: &Path) {
     std::fs::create_dir_all(kiara_appconfig_dir).unwrap();
-    let files_to_copy = ["pixi.lock", "pixi.toml", PYTHON_VERSION, "requirements.txt"];
+    let files_to_copy = [
+        "pixi.lock",
+        "pixi.toml",
+        PYTHON_VERSION,
+        "requirements.txt",
+        "python-build",
+    ];
     for file in files_to_copy {
         copy_resource_file(handle, kiara_appconfig_dir, file);
     }
