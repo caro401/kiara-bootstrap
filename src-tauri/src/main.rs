@@ -4,10 +4,11 @@
 use duct::cmd;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::{fs, io};
 use std::fmt::format;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
+use std::{fs, io};
+use anyhow::{Context, ensure};
 use tauri::api::process::{Command, CommandEvent};
 use tauri::{App, AppHandle, Manager};
 
@@ -50,10 +51,8 @@ fn log_to_frontend(handle: &AppHandle, message: impl Into<String>) {
 fn right_python_exists(kiara_appconfig_dir: &Path) -> bool {
     let python_command = kiara_appconfig_dir.to_owned().join("python/bin/python");
     let python_version_output = cmd!(python_command, "--version").stdout_capture().read();
-    match dbg!(python_version_output) {
-        Ok(output) => {
-            dbg!(output.trim()) == format!("Python {PYTHON_VERSION}")
-        }
+    match python_version_output {
+        Ok(output) => output.trim() == format!("Python {PYTHON_VERSION}"),
         Err(_) => false,
     }
 }
@@ -64,24 +63,25 @@ fn get_resource_path(handle: &AppHandle, pathname: &str) -> PathBuf {
         .resolve_resource(format!("resources/{pathname}"))
         .expect(&format!("failed to find {pathname} file in app resources"))
 }
-fn right_requirements_exist(handle: &AppHandle,kiara_appconfig_dir: &Path ) -> bool {
+fn right_requirements_exist(handle: &AppHandle, kiara_appconfig_dir: &Path) -> bool {
     let existing_requirements_path = kiara_appconfig_dir.join("requirements.txt");
     let existing_requirements = std::fs::read_to_string(&existing_requirements_path);
     let requirements_resource = get_resource_path(&handle, "requirements.txt");
-    let new_requierements =  std::fs::read_to_string(&requirements_resource).unwrap();
-    existing_requirements.ok().as_ref() ==  Some(&new_requierements)
+    let new_requierements = std::fs::read_to_string(&requirements_resource).unwrap();
+    existing_requirements.ok().as_ref() == Some(&new_requierements)
 }
 
-fn compile_python(kiara_appconfig_dir: &Path) {
-        std::fs::create_dir_all(&kiara_appconfig_dir).unwrap();
-        let install_result = std::process::Command::new("pixi")
+fn compile_python(kiara_appconfig_dir: &Path) -> anyhow::Result<()> {
+    std::fs::create_dir_all(&kiara_appconfig_dir).context("Failed to create config directory for kiara apps")?;
+
+    let install_result = std::process::Command::new("pixi")
         .arg("install")
         .current_dir(&kiara_appconfig_dir)
         .spawn()
-        .expect("Failed to pixi install. Do you have pixi on the system?")
+        .context("Failed to pixi install. Do you have pixi on the system?")?
         .wait()
-        .expect("Something went wrong with pixi");
-    assert!(
+        .context("Something went wrong with pixi")?;
+    ensure!(
         install_result.success(),
         "Failed to set up environment with pixi"
     );
@@ -91,30 +91,31 @@ fn compile_python(kiara_appconfig_dir: &Path) {
         .arg("compile-python")
         .current_dir(&kiara_appconfig_dir)
         .spawn()
-        .expect("Failed to run pixi command. Do you have pixi on the system.unwrap()")
+        .context("Failed to run pixi command. Do you have pixi on the system?")?
         .wait()
-        .expect("Something went wrong with pixi.unwrap()");
-    assert!(python_result.success(), "Failed to compile python");
-
+        .context("Something went wrong with pixi?")?;
+    ensure!(python_result.success(), "Failed to compile python");
+    Ok(())
 }
 
-fn pip_install(kiara_appconfig_dir: &Path) {
+fn pip_install(kiara_appconfig_dir: &Path) -> anyhow::Result<()>{
     let python_deps_result = std::process::Command::new("./python/bin/python")
         .args(["-m", "pip", "install", "-r", "requirements.txt"])
         .current_dir(&kiara_appconfig_dir)
         .spawn()
-        .expect("Failed to run pip. Is your python install ok?")
+        .context("Failed to run pip. Is your python install ok?")?
         .wait()
-        .expect("Something went wrong with installing packages");
-    assert!(python_deps_result.success(), "Failed to install kiara");
+        .context("Something went wrong with installing packages")?;
+    ensure!(python_deps_result.success(), "Failed to install kiara");
+    Ok(())
 }
 
 fn copy_resource_file(handle: &AppHandle, kiara_appconfig_dir: &Path, filename: &str) {
-    let resource =  get_resource_path(&handle, filename);
+    let resource = get_resource_path(&handle, filename);
     std::fs::copy(resource, kiara_appconfig_dir.join(filename)).unwrap();
 }
 
-fn copy_resources(handle: &AppHandle,kiara_appconfig_dir: &Path ) {
+fn copy_resources(handle: &AppHandle, kiara_appconfig_dir: &Path) {
     std::fs::create_dir_all(&kiara_appconfig_dir).unwrap();
     let files_to_copy = ["pixi.lock", "pixi.toml", PYTHON_VERSION, "requirements.txt"];
     for file in files_to_copy {
@@ -122,9 +123,9 @@ fn copy_resources(handle: &AppHandle,kiara_appconfig_dir: &Path ) {
     }
 }
 
-fn setup_python(handle: tauri::AppHandle) -> io::Result<HashMap<String, String>> {
+fn setup_python(handle: &AppHandle) -> anyhow::Result<HashMap<String, String>> {
     // define the config directory, we'll copy/install everything into $HOME/.kiara-app
-    let mut kiara_appconfig_dir = dirs::home_dir().expect("Failed to get home directory");
+    let mut kiara_appconfig_dir = dirs::home_dir().context("Failed to get home directory")?;
     kiara_appconfig_dir.push(".kiara-app");
 
     // is the existing python version the same?
@@ -137,25 +138,22 @@ fn setup_python(handle: tauri::AppHandle) -> io::Result<HashMap<String, String>>
             &handle,
             "Correct version of Python doesn't exist, installing... This might take a couple of minutes",
         );
-        // clean up any old files
         let _ = std::fs::remove_dir_all(&kiara_appconfig_dir);
         copy_resources(&handle, &kiara_appconfig_dir);
-        let _ = compile_python(&kiara_appconfig_dir);
+        compile_python(&kiara_appconfig_dir)?;
         log_to_frontend(&handle, "Python installed! Installing packages...");
-        pip_install(&kiara_appconfig_dir);
+        pip_install(&kiara_appconfig_dir)?;
     }
 
     log_to_frontend(&handle, "Checking packages are up to date...");
     let packages_up_to_date = right_requirements_exist(&handle, &kiara_appconfig_dir);
     if packages_up_to_date {
-            log_to_frontend(&handle, "Packages are up to date");
-    }
-    else {
+        log_to_frontend(&handle, "Packages are up to date");
+    } else {
         log_to_frontend(&handle, "Updating packages...");
         copy_resources(&handle, &kiara_appconfig_dir);
-        pip_install(&kiara_appconfig_dir);
+        pip_install(&kiara_appconfig_dir)?;
         log_to_frontend(&handle, "Packages are up to date");
-
     }
 
     log_to_frontend(&handle, "Starting network analysis app");
@@ -191,8 +189,22 @@ fn main() {
             let handle = app.handle();
             std::thread::spawn(move || {
                 std::thread::sleep(Duration::from_secs(3));
-                let env_vars = setup_python(handle).unwrap();
-                start_main_app(env_vars);
+                let result = setup_python(&handle);
+                match result {
+                    Ok(env_vars) => {
+                        start_main_app(env_vars);
+                    }
+                    Err(error_text) => {
+                        handle
+                            .emit_all(
+                                "errorevent",
+                                Message {
+                                    message: format!("{error_text:?}"),
+                                },
+                            )
+                            .unwrap();
+                    }
+                }
             });
             Ok(())
         })
